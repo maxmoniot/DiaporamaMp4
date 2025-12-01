@@ -112,6 +112,15 @@ h1, h2, h3, h4, h5, h6 {
   }
 }
 
+@keyframes kenburns {
+  0% {
+    transform: scale(1);
+  }
+  100% {
+    transform: scale(1.05);
+  }
+}
+
 .animate-fade-in {
   animation: fade-in 0.3s ease-out forwards;
 }

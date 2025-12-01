@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { toast } from "sonner";
 import axios from "axios";
-import { motion, AnimatePresence, Reorder } from "framer-motion";
+import { Reorder } from "framer-motion";
 import { useDropzone } from "react-dropzone";
 import {
   Upload,
@@ -21,6 +21,7 @@ import {
   Volume2,
   VolumeX,
   SkipBack,
+  Timer,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Slider } from "@/components/ui/slider";
@@ -39,6 +40,7 @@ import {
 } from "@/components/ui/dialog";
 import { Progress } from "@/components/ui/progress";
 import { ScrollArea, ScrollBar } from "@/components/ui/scroll-area";
+import { Input } from "@/components/ui/input";
 
 const API = `${process.env.REACT_APP_BACKEND_URL}/api`;
 
@@ -53,7 +55,8 @@ export default function HomePage() {
   const [exportStatus, setExportStatus] = useState(null);
   const [isMuted, setIsMuted] = useState(false);
   const [selectedPhotoId, setSelectedPhotoId] = useState(null);
-  const [previewError, setPreviewError] = useState(null);
+  const [globalDuration, setGlobalDuration] = useState(2);
+  const [isDownloading, setIsDownloading] = useState(false);
   
   const audioRef = useRef(null);
   const playIntervalRef = useRef(null);
@@ -215,6 +218,20 @@ export default function HomePage() {
     }
   };
 
+  // Apply global duration to all photos
+  const applyGlobalDuration = async () => {
+    if (!project?.id || !sortedPhotos.length) return;
+    try {
+      await axios.put(`${API}/projects/${project.id}/photos/duration/all`, {
+        duration: globalDuration,
+      });
+      await refreshProject();
+      toast.success(`Durée de ${globalDuration}s appliquée à toutes les photos`);
+    } catch (error) {
+      toast.error("Erreur lors de la mise à jour");
+    }
+  };
+
   // Reorder photos
   const handleReorder = async (newOrder) => {
     if (!project?.id) return;
@@ -351,28 +368,24 @@ export default function HomePage() {
     }
   };
 
-  const downloadExport = async () => {
+  const downloadExport = () => {
     if (!project?.id) return;
-    try {
-      const response = await axios.get(
-        `${API}/projects/${project.id}/export/download`,
-        { responseType: 'blob' }
-      );
-      
-      // Create download link
-      const url = window.URL.createObjectURL(new Blob([response.data]));
-      const link = document.createElement('a');
-      link.href = url;
-      link.setAttribute('download', 'photosync_video.mp4');
-      document.body.appendChild(link);
-      link.click();
-      link.remove();
-      window.URL.revokeObjectURL(url);
-      
+    setIsDownloading(true);
+    
+    // Use direct link download
+    const downloadUrl = `${API}/projects/${project.id}/export/download`;
+    const link = document.createElement('a');
+    link.href = downloadUrl;
+    link.download = 'photosync_video.mp4';
+    link.style.display = 'none';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    
+    setTimeout(() => {
+      setIsDownloading(false);
       toast.success("Téléchargement démarré !");
-    } catch (error) {
-      toast.error("Erreur lors du téléchargement");
-    }
+    }, 500);
   };
 
   // Sorted photos
@@ -382,15 +395,14 @@ export default function HomePage() {
 
   const currentPhoto = sortedPhotos[currentPhotoIndex];
   const currentFormat = project?.settings?.format || "horizontal";
+  const currentTransition = project?.settings?.transition || "none";
 
-  // Get preview URL with blurred background
+  // Get preview URL - use the preview with blurred background
   const getPreviewUrl = (photo) => {
     if (!photo) return null;
-    // Use the preview with blurred background
     if (photo.preview) {
       return `${API}/previews/${photo.preview}`;
     }
-    // Fallback to original photo
     return `${API}/photos/${photo.filename}`;
   };
 
@@ -586,7 +598,7 @@ export default function HomePage() {
                           <SelectValue />
                         </SelectTrigger>
                         <SelectContent className="bg-zinc-900 border-zinc-700">
-                          <SelectItem value="none">Aucune</SelectItem>
+                          <SelectItem value="none">Aucune (cut)</SelectItem>
                           <SelectItem value="fade">Fondu enchaîné</SelectItem>
                         </SelectContent>
                       </Select>
@@ -611,6 +623,38 @@ export default function HomePage() {
                       </Select>
                     </div>
                   </div>
+                  
+                  {/* Global duration control */}
+                  <div className="pt-4 border-t border-zinc-800">
+                    <div className="flex items-center justify-between gap-4">
+                      <div className="flex items-center gap-2">
+                        <Timer className="w-4 h-4 text-zinc-400" />
+                        <span className="text-sm text-zinc-400">Durée par photo</span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <Input
+                          type="number"
+                          step="0.1"
+                          min="0.5"
+                          max="30"
+                          value={globalDuration}
+                          onChange={(e) => setGlobalDuration(parseFloat(e.target.value) || 2)}
+                          className="w-20 bg-zinc-900 border-zinc-700 text-center"
+                          data-testid="global-duration-input"
+                        />
+                        <span className="text-sm text-zinc-500">sec</span>
+                        <Button
+                          onClick={applyGlobalDuration}
+                          variant="outline"
+                          size="sm"
+                          className="border-zinc-700 hover:bg-zinc-800"
+                          data-testid="apply-global-duration-btn"
+                        >
+                          Appliquer à tout
+                        </Button>
+                      </div>
+                    </div>
+                  </div>
                 </div>
 
                 {/* Stats */}
@@ -633,35 +677,25 @@ export default function HomePage() {
                   }`}
                   data-testid="preview-container"
                 >
-                  <AnimatePresence mode="wait">
-                    {currentPhoto ? (
-                      <motion.div
-                        key={`${currentPhoto.id}-${currentPhotoIndex}`}
-                        initial={{ opacity: 0 }}
-                        animate={{ 
-                          opacity: 1,
-                          scale: [1, 1.05],
-                        }}
-                        exit={{ opacity: 0 }}
-                        transition={{ 
-                          opacity: { duration: 0.3 },
-                          scale: { duration: currentPhoto.duration, ease: "linear" }
-                        }}
-                        className="absolute inset-0"
-                      >
-                        <img
-                          src={getPreviewUrl(currentPhoto)}
-                          alt=""
-                          className="w-full h-full object-contain"
-                          onError={() => setPreviewError(currentPhoto.id)}
-                        />
-                      </motion.div>
-                    ) : (
-                      <div className="absolute inset-0 flex items-center justify-center text-zinc-600">
-                        <ImageIcon className="w-16 h-16" />
-                      </div>
-                    )}
-                  </AnimatePresence>
+                  {currentPhoto ? (
+                    <div
+                      key={`${currentPhoto.id}-${currentPhotoIndex}`}
+                      className="absolute inset-0"
+                      style={{
+                        animation: `kenburns ${currentPhoto.duration}s linear`,
+                      }}
+                    >
+                      <img
+                        src={getPreviewUrl(currentPhoto)}
+                        alt=""
+                        className="w-full h-full object-contain"
+                      />
+                    </div>
+                  ) : (
+                    <div className="absolute inset-0 flex items-center justify-center text-zinc-600">
+                      <ImageIcon className="w-16 h-16" />
+                    </div>
+                  )}
                   
                   {/* Time overlay */}
                   <div className="absolute bottom-4 right-4 bg-black/70 px-3 py-1 rounded-full text-sm mono z-10">
@@ -850,10 +884,15 @@ export default function HomePage() {
                 <p className="text-lg font-medium">Export terminé !</p>
                 <Button
                   onClick={downloadExport}
+                  disabled={isDownloading}
                   className="bg-indigo-500 hover:bg-indigo-600 gap-2"
                   data-testid="download-btn"
                 >
-                  <Download className="w-4 h-4" />
+                  {isDownloading ? (
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                  ) : (
+                    <Download className="w-4 h-4" />
+                  )}
                   Télécharger la vidéo
                 </Button>
               </div>
