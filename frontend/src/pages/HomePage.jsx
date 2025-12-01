@@ -143,7 +143,6 @@ const PreviewPlayer = ({ photos, currentIndex, isPlaying, format, transition }) 
         format === "vertical" ? "preview-vertical" : "preview-horizontal"
       }`}
       style={{
-        // GPU acceleration
         transform: 'translateZ(0)',
         willChange: 'transform',
         backfaceVisibility: 'hidden',
@@ -166,7 +165,7 @@ const PreviewPlayer = ({ photos, currentIndex, isPlaying, format, transition }) 
             style={{
               width: '100%',
               height: '100%',
-              objectFit: 'contain',
+              objectFit: 'cover', // cover pour remplir et montrer le fond flou
               display: 'block',
             }}
           />
