@@ -330,10 +330,8 @@ async def export_video(project_id: str):
             
             # Generate frames with smooth Ken Burns effect
             for frame_num in range(photo_frames):
-                # Use easing function for smoother animation
-                t = frame_num / max(photo_frames - 1, 1)
-                # Smooth easing (ease-in-out)
-                progress = t * t * (3.0 - 2.0 * t)
+                # Linear progression (no easing)
+                progress = frame_num / max(photo_frames - 1, 1)
                 
                 # Ken Burns: smooth zoom from 1.0 to 1.05
                 zoom = 1.0 + 0.05 * progress
@@ -342,9 +340,9 @@ async def export_video(project_id: str):
                 crop_w = target_size[0] / zoom
                 crop_h = target_size[1] / zoom
                 
-                # Smooth pan (using float)
-                pan_x = 8.0 * progress
-                pan_y = 4.0 * progress
+                # Smooth pan (using float) - 10px like before
+                pan_x = 10.0 * progress
+                pan_y = 5.0 * progress
                 
                 # Center crop with pan offset
                 left = (target_size[0] - crop_w) / 2.0 + pan_x
