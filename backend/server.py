@@ -783,6 +783,15 @@ async def get_preview(filename: str):
     
     return FileResponse(path=str(file_path))
 
+@api_router.get("/music/{filename}")
+async def get_music(filename: str):
+    """Serve music file"""
+    file_path = MUSIC_DIR / filename
+    if not file_path.exists():
+        raise HTTPException(status_code=404, detail="Music not found")
+    
+    return FileResponse(path=str(file_path), media_type="audio/mpeg")
+
 # Include router
 app.include_router(api_router)
 
