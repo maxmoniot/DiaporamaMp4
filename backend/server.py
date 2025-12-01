@@ -785,7 +785,9 @@ async def download_export(project_id: str):
         filename="photosync_video.mp4",
         media_type="video/mp4",
         headers={
-            "Content-Disposition": f"attachment; filename=photosync_video.mp4"
+            "Content-Disposition": "attachment; filename=photosync_video.mp4",
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Expose-Headers": "Content-Disposition"
         }
     )
 
