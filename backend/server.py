@@ -1,4 +1,5 @@
-from fastapi import FastAPI, APIRouter
+from fastapi import FastAPI, APIRouter, UploadFile, File, HTTPException, BackgroundTasks
+from fastapi.responses import FileResponse, StreamingResponse
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
@@ -6,10 +7,18 @@ import os
 import logging
 from pathlib import Path
 from pydantic import BaseModel, Field, ConfigDict
-from typing import List
+from typing import List, Optional
 import uuid
 from datetime import datetime, timezone
-
+import aiofiles
+import shutil
+import json
+import subprocess
+import asyncio
+from PIL import Image, ImageFilter
+import numpy as np
+import io
+import base64
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
@@ -17,56 +26,661 @@ load_dotenv(ROOT_DIR / '.env')
 # MongoDB connection
 mongo_url = os.environ['MONGO_URL']
 client = AsyncIOMotorClient(mongo_url)
-db = client[os.environ['DB_NAME']]
+db = client[os.environ.get('DB_NAME', 'photosync_db')]
 
-# Create the main app without a prefix
+# Create directories for uploads
+UPLOAD_DIR = ROOT_DIR / 'uploads'
+PHOTOS_DIR = UPLOAD_DIR / 'photos'
+MUSIC_DIR = UPLOAD_DIR / 'music'
+EXPORT_DIR = UPLOAD_DIR / 'exports'
+THUMBNAILS_DIR = UPLOAD_DIR / 'thumbnails'
+
+for d in [PHOTOS_DIR, MUSIC_DIR, EXPORT_DIR, THUMBNAILS_DIR]:
+    d.mkdir(parents=True, exist_ok=True)
+
 app = FastAPI()
-
-# Create a router with the /api prefix
 api_router = APIRouter(prefix="/api")
 
-
-# Define Models
-class StatusCheck(BaseModel):
-    model_config = ConfigDict(extra="ignore")  # Ignore MongoDB's _id field
-    
+# Models
+class Photo(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
-    client_name: str
-    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    filename: str
+    original_name: str
+    width: int
+    height: int
+    orientation: str  # 'landscape', 'portrait', 'square'
+    duration: float = 2.0  # seconds this photo displays
+    order: int = 0
+    thumbnail: Optional[str] = None
 
-class StatusCheckCreate(BaseModel):
-    client_name: str
+class MusicInfo(BaseModel):
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    filename: str
+    original_name: str
+    duration: float  # in seconds
+    tempo: float  # BPM
+    beats: List[float] = []  # beat times in seconds
 
-# Add your routes to the router instead of directly to app
+class ProjectSettings(BaseModel):
+    format: str = "horizontal"  # 'horizontal' or 'vertical'
+    resolution: str = "1080p"  # '720p' or '1080p'
+    transition: str = "none"  # 'none' or 'fade'
+    transition_duration: float = 0.3  # seconds
+    global_rhythm_multiplier: float = 1.0  # multiply beat interval
+    animation_type: str = "zoom"  # 'zoom', 'pan', 'both'
+
+class Project(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    photos: List[Photo] = []
+    music: Optional[MusicInfo] = None
+    settings: ProjectSettings = Field(default_factory=ProjectSettings)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    export_status: str = "idle"  # 'idle', 'processing', 'completed', 'error'
+    export_progress: float = 0.0
+    export_file: Optional[str] = None
+
+class PhotoReorderRequest(BaseModel):
+    photo_ids: List[str]
+
+class PhotoDurationUpdate(BaseModel):
+    photo_id: str
+    duration: float
+
+class SettingsUpdate(BaseModel):
+    format: Optional[str] = None
+    resolution: Optional[str] = None
+    transition: Optional[str] = None
+    transition_duration: Optional[float] = None
+    global_rhythm_multiplier: Optional[float] = None
+    animation_type: Optional[str] = None
+
+# Helper functions
+def get_orientation(width: int, height: int) -> str:
+    ratio = width / height
+    if ratio > 1.1:
+        return "landscape"
+    elif ratio < 0.9:
+        return "portrait"
+    return "square"
+
+def get_resolution(resolution: str, format: str) -> tuple:
+    resolutions = {
+        "720p": {"horizontal": (1280, 720), "vertical": (720, 1280)},
+        "1080p": {"horizontal": (1920, 1080), "vertical": (1080, 1920)},
+    }
+    return resolutions.get(resolution, resolutions["1080p"]).get(format, (1920, 1080))
+
+async def create_thumbnail(image_path: Path, thumb_path: Path, size=(200, 200)):
+    """Create thumbnail for preview"""
+    try:
+        with Image.open(image_path) as img:
+            img.thumbnail(size, Image.Resampling.LANCZOS)
+            img.save(thumb_path, "JPEG", quality=85)
+        return True
+    except Exception as e:
+        logging.error(f"Error creating thumbnail: {e}")
+        return False
+
+async def analyze_audio(file_path: Path) -> dict:
+    """Analyze audio file to extract tempo and beats"""
+    try:
+        import librosa
+        y, sr = librosa.load(str(file_path), sr=22050)
+        duration = librosa.get_duration(y=y, sr=sr)
+        
+        # Get tempo and beats
+        tempo, beat_frames = librosa.beat.beat_track(y=y, sr=sr)
+        beat_times = librosa.frames_to_time(beat_frames, sr=sr).tolist()
+        
+        # Convert tempo to float if it's an array
+        if hasattr(tempo, '__iter__'):
+            tempo = float(tempo[0]) if len(tempo) > 0 else 120.0
+        else:
+            tempo = float(tempo)
+        
+        return {
+            "duration": float(duration),
+            "tempo": tempo,
+            "beats": beat_times
+        }
+    except Exception as e:
+        logging.error(f"Error analyzing audio: {e}")
+        # Return default values if analysis fails
+        return {
+            "duration": 180.0,
+            "tempo": 120.0,
+            "beats": []
+        }
+
+def create_blurred_background(img: Image.Image, target_size: tuple) -> Image.Image:
+    """Create a blurred background from the image"""
+    # Scale image to fill the target size
+    img_ratio = img.width / img.height
+    target_ratio = target_size[0] / target_size[1]
+    
+    if img_ratio > target_ratio:
+        # Image is wider, scale by height
+        new_height = target_size[1]
+        new_width = int(new_height * img_ratio)
+    else:
+        # Image is taller, scale by width
+        new_width = target_size[0]
+        new_height = int(new_width / img_ratio)
+    
+    # Resize and center crop
+    bg = img.resize((new_width, new_height), Image.Resampling.LANCZOS)
+    
+    # Center crop to target size
+    left = (new_width - target_size[0]) // 2
+    top = (new_height - target_size[1]) // 2
+    bg = bg.crop((left, top, left + target_size[0], top + target_size[1]))
+    
+    # Apply blur
+    bg = bg.filter(ImageFilter.GaussianBlur(radius=30))
+    
+    # Darken slightly
+    from PIL import ImageEnhance
+    enhancer = ImageEnhance.Brightness(bg)
+    bg = enhancer.enhance(0.5)
+    
+    return bg
+
+def fit_image_to_frame(img: Image.Image, target_size: tuple) -> Image.Image:
+    """Fit image to frame while maintaining aspect ratio"""
+    img_ratio = img.width / img.height
+    target_ratio = target_size[0] / target_size[1]
+    
+    if img_ratio > target_ratio:
+        # Image is wider, fit by width
+        new_width = target_size[0]
+        new_height = int(new_width / img_ratio)
+    else:
+        # Image is taller, fit by height
+        new_height = target_size[1]
+        new_width = int(new_height * img_ratio)
+    
+    return img.resize((new_width, new_height), Image.Resampling.LANCZOS)
+
+def create_frame_with_background(img_path: Path, target_size: tuple) -> Image.Image:
+    """Create a frame with the image on a blurred background"""
+    with Image.open(img_path) as img:
+        img = img.convert('RGB')
+        
+        # Create blurred background
+        bg = create_blurred_background(img, target_size)
+        
+        # Fit the image
+        fitted = fit_image_to_frame(img, target_size)
+        
+        # Center the fitted image on the background
+        x = (target_size[0] - fitted.width) // 2
+        y = (target_size[1] - fitted.height) // 2
+        
+        bg.paste(fitted, (x, y))
+        
+        return bg
+
+async def export_video(project_id: str):
+    """Export project to MP4 video"""
+    try:
+        # Get project from database
+        project_data = await db.projects.find_one({"id": project_id})
+        if not project_data:
+            return
+        
+        project = Project(**project_data)
+        
+        # Update status
+        await db.projects.update_one(
+            {"id": project_id},
+            {"$set": {"export_status": "processing", "export_progress": 0.0}}
+        )
+        
+        # Get resolution
+        target_size = get_resolution(project.settings.resolution, project.settings.format)
+        fps = 30
+        
+        # Create temporary directory for frames
+        temp_dir = EXPORT_DIR / f"temp_{project_id}"
+        temp_dir.mkdir(exist_ok=True)
+        
+        # Calculate frame counts
+        total_photos = len(project.photos)
+        if total_photos == 0:
+            await db.projects.update_one(
+                {"id": project_id},
+                {"$set": {"export_status": "error"}}
+            )
+            return
+        
+        frame_index = 0
+        transition_frames = int(project.settings.transition_duration * fps) if project.settings.transition == "fade" else 0
+        
+        for photo_idx, photo in enumerate(sorted(project.photos, key=lambda p: p.order)):
+            photo_path = PHOTOS_DIR / photo.filename
+            if not photo_path.exists():
+                continue
+            
+            # Calculate frames for this photo
+            photo_frames = int(photo.duration * fps)
+            
+            # Create base frame
+            base_frame = create_frame_with_background(photo_path, target_size)
+            
+            # Generate frames with Ken Burns effect
+            for frame_num in range(photo_frames):
+                progress = frame_num / photo_frames
+                
+                # Ken Burns effect: slight zoom and pan
+                zoom_factor = 1.0 + 0.05 * progress  # 5% zoom over duration
+                
+                # Calculate crop for zoom effect
+                new_width = int(target_size[0] / zoom_factor)
+                new_height = int(target_size[1] / zoom_factor)
+                
+                # Pan slightly
+                pan_x = int(10 * progress)  # Pan 10 pixels
+                pan_y = int(5 * progress)   # Pan 5 pixels
+                
+                left = (target_size[0] - new_width) // 2 + pan_x
+                top = (target_size[1] - new_height) // 2 + pan_y
+                
+                # Ensure bounds
+                left = max(0, min(left, target_size[0] - new_width))
+                top = max(0, min(top, target_size[1] - new_height))
+                
+                frame = base_frame.crop((left, top, left + new_width, top + new_height))
+                frame = frame.resize(target_size, Image.Resampling.LANCZOS)
+                
+                # Handle fade transition at start
+                if project.settings.transition == "fade" and photo_idx > 0 and frame_num < transition_frames:
+                    # Load previous frame
+                    prev_frame_path = temp_dir / f"frame_{frame_index - transition_frames + frame_num:06d}.png"
+                    if prev_frame_path.exists():
+                        with Image.open(prev_frame_path) as prev_frame:
+                            alpha = frame_num / transition_frames
+                            frame = Image.blend(prev_frame.convert('RGB'), frame, alpha)
+                
+                # Save frame
+                frame_path = temp_dir / f"frame_{frame_index:06d}.png"
+                frame.save(frame_path, "PNG")
+                frame_index += 1
+            
+            # Update progress
+            progress_percent = (photo_idx + 1) / total_photos * 80  # 80% for frame generation
+            await db.projects.update_one(
+                {"id": project_id},
+                {"$set": {"export_progress": progress_percent}}
+            )
+        
+        # Generate video with FFmpeg
+        output_file = EXPORT_DIR / f"{project_id}.mp4"
+        
+        ffmpeg_cmd = [
+            "ffmpeg", "-y",
+            "-framerate", str(fps),
+            "-i", str(temp_dir / "frame_%06d.png"),
+        ]
+        
+        # Add audio if available
+        if project.music:
+            audio_path = MUSIC_DIR / project.music.filename
+            if audio_path.exists():
+                ffmpeg_cmd.extend(["-i", str(audio_path), "-shortest"])
+        
+        ffmpeg_cmd.extend([
+            "-c:v", "libx264",
+            "-pix_fmt", "yuv420p",
+            "-crf", "23",
+            "-preset", "medium",
+        ])
+        
+        if project.music:
+            ffmpeg_cmd.extend(["-c:a", "aac", "-b:a", "192k"])
+        
+        ffmpeg_cmd.append(str(output_file))
+        
+        # Run FFmpeg
+        process = await asyncio.create_subprocess_exec(
+            *ffmpeg_cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE
+        )
+        await process.communicate()
+        
+        # Cleanup temp directory
+        shutil.rmtree(temp_dir, ignore_errors=True)
+        
+        if output_file.exists():
+            await db.projects.update_one(
+                {"id": project_id},
+                {"$set": {
+                    "export_status": "completed",
+                    "export_progress": 100.0,
+                    "export_file": str(output_file.name)
+                }}
+            )
+        else:
+            await db.projects.update_one(
+                {"id": project_id},
+                {"$set": {"export_status": "error"}}
+            )
+    
+    except Exception as e:
+        logging.error(f"Export error: {e}")
+        await db.projects.update_one(
+            {"id": project_id},
+            {"$set": {"export_status": "error"}}
+        )
+
+# API Routes
 @api_router.get("/")
 async def root():
-    return {"message": "Hello World"}
+    return {"message": "PhotoSync Video Creator API"}
 
-@api_router.post("/status", response_model=StatusCheck)
-async def create_status_check(input: StatusCheckCreate):
-    status_dict = input.model_dump()
-    status_obj = StatusCheck(**status_dict)
-    
-    # Convert to dict and serialize datetime to ISO string for MongoDB
-    doc = status_obj.model_dump()
-    doc['timestamp'] = doc['timestamp'].isoformat()
-    
-    _ = await db.status_checks.insert_one(doc)
-    return status_obj
+@api_router.post("/projects", response_model=Project)
+async def create_project():
+    """Create a new project"""
+    project = Project()
+    doc = project.model_dump()
+    doc['created_at'] = doc['created_at'].isoformat()
+    await db.projects.insert_one(doc)
+    return project
 
-@api_router.get("/status", response_model=List[StatusCheck])
-async def get_status_checks():
-    # Exclude MongoDB's _id field from the query results
-    status_checks = await db.status_checks.find({}, {"_id": 0}).to_list(1000)
-    
-    # Convert ISO string timestamps back to datetime objects
-    for check in status_checks:
-        if isinstance(check['timestamp'], str):
-            check['timestamp'] = datetime.fromisoformat(check['timestamp'])
-    
-    return status_checks
+@api_router.get("/projects/{project_id}", response_model=Project)
+async def get_project(project_id: str):
+    """Get project by ID"""
+    project_data = await db.projects.find_one({"id": project_id}, {"_id": 0})
+    if not project_data:
+        raise HTTPException(status_code=404, detail="Project not found")
+    if isinstance(project_data.get('created_at'), str):
+        project_data['created_at'] = datetime.fromisoformat(project_data['created_at'])
+    return Project(**project_data)
 
-# Include the router in the main app
+@api_router.post("/projects/{project_id}/photos")
+async def upload_photos(project_id: str, files: List[UploadFile] = File(...)):
+    """Upload photos to a project"""
+    project_data = await db.projects.find_one({"id": project_id})
+    if not project_data:
+        raise HTTPException(status_code=404, detail="Project not found")
+    
+    uploaded_photos = []
+    current_order = len(project_data.get('photos', []))
+    
+    for file in files:
+        # Generate unique filename
+        ext = Path(file.filename).suffix.lower()
+        if ext not in ['.jpg', '.jpeg', '.png', '.webp', '.gif', '.bmp']:
+            continue
+        
+        photo_id = str(uuid.uuid4())
+        filename = f"{photo_id}{ext}"
+        file_path = PHOTOS_DIR / filename
+        
+        # Save file
+        async with aiofiles.open(file_path, 'wb') as f:
+            content = await file.read()
+            await f.write(content)
+        
+        # Get image dimensions
+        with Image.open(file_path) as img:
+            width, height = img.size
+        
+        # Create thumbnail
+        thumb_filename = f"{photo_id}_thumb.jpg"
+        thumb_path = THUMBNAILS_DIR / thumb_filename
+        await create_thumbnail(file_path, thumb_path)
+        
+        # Create photo object
+        photo = Photo(
+            id=photo_id,
+            filename=filename,
+            original_name=file.filename,
+            width=width,
+            height=height,
+            orientation=get_orientation(width, height),
+            order=current_order,
+            thumbnail=thumb_filename
+        )
+        
+        uploaded_photos.append(photo.model_dump())
+        current_order += 1
+    
+    # Update project
+    await db.projects.update_one(
+        {"id": project_id},
+        {"$push": {"photos": {"$each": uploaded_photos}}}
+    )
+    
+    return {"uploaded": len(uploaded_photos), "photos": uploaded_photos}
+
+@api_router.post("/projects/{project_id}/music")
+async def upload_music(project_id: str, file: UploadFile = File(...)):
+    """Upload music file to a project"""
+    project_data = await db.projects.find_one({"id": project_id})
+    if not project_data:
+        raise HTTPException(status_code=404, detail="Project not found")
+    
+    # Validate file type
+    ext = Path(file.filename).suffix.lower()
+    if ext not in ['.mp3']:
+        raise HTTPException(status_code=400, detail="Only MP3 files are supported")
+    
+    # Generate unique filename
+    music_id = str(uuid.uuid4())
+    filename = f"{music_id}{ext}"
+    file_path = MUSIC_DIR / filename
+    
+    # Save file
+    async with aiofiles.open(file_path, 'wb') as f:
+        content = await file.read()
+        await f.write(content)
+    
+    # Analyze audio
+    audio_info = await analyze_audio(file_path)
+    
+    # Create music info
+    music = MusicInfo(
+        id=music_id,
+        filename=filename,
+        original_name=file.filename,
+        duration=audio_info["duration"],
+        tempo=audio_info["tempo"],
+        beats=audio_info["beats"]
+    )
+    
+    # Update project
+    await db.projects.update_one(
+        {"id": project_id},
+        {"$set": {"music": music.model_dump()}}
+    )
+    
+    return music
+
+@api_router.post("/projects/{project_id}/sync-to-beats")
+async def sync_photos_to_beats(project_id: str):
+    """Sync photo durations to music beats"""
+    project_data = await db.projects.find_one({"id": project_id})
+    if not project_data:
+        raise HTTPException(status_code=404, detail="Project not found")
+    
+    project = Project(**project_data)
+    
+    if not project.music or not project.music.beats:
+        raise HTTPException(status_code=400, detail="No music with beat information")
+    
+    photos = sorted(project.photos, key=lambda p: p.order)
+    beats = project.music.beats
+    multiplier = project.settings.global_rhythm_multiplier
+    
+    if len(photos) == 0:
+        return {"synced": False}
+    
+    # Calculate beat intervals
+    beat_interval = 60.0 / project.music.tempo * multiplier
+    
+    # Assign durations based on beats
+    updated_photos = []
+    for i, photo in enumerate(photos):
+        # Each photo shows for one beat interval (or multiple)
+        photo_dict = photo.model_dump()
+        photo_dict['duration'] = beat_interval
+        updated_photos.append(photo_dict)
+    
+    # Update project
+    await db.projects.update_one(
+        {"id": project_id},
+        {"$set": {"photos": updated_photos}}
+    )
+    
+    return {"synced": True, "beat_interval": beat_interval}
+
+@api_router.put("/projects/{project_id}/photos/reorder")
+async def reorder_photos(project_id: str, request: PhotoReorderRequest):
+    """Reorder photos in a project"""
+    project_data = await db.projects.find_one({"id": project_id})
+    if not project_data:
+        raise HTTPException(status_code=404, detail="Project not found")
+    
+    # Create order map
+    order_map = {pid: idx for idx, pid in enumerate(request.photo_ids)}
+    
+    # Update photo orders
+    photos = project_data.get('photos', [])
+    for photo in photos:
+        if photo['id'] in order_map:
+            photo['order'] = order_map[photo['id']]
+    
+    # Sort and update
+    photos.sort(key=lambda p: p.get('order', 0))
+    
+    await db.projects.update_one(
+        {"id": project_id},
+        {"$set": {"photos": photos}}
+    )
+    
+    return {"reordered": True}
+
+@api_router.put("/projects/{project_id}/photos/duration")
+async def update_photo_duration(project_id: str, update: PhotoDurationUpdate):
+    """Update duration for a specific photo"""
+    await db.projects.update_one(
+        {"id": project_id, "photos.id": update.photo_id},
+        {"$set": {"photos.$.duration": update.duration}}
+    )
+    return {"updated": True}
+
+@api_router.delete("/projects/{project_id}/photos/{photo_id}")
+async def delete_photo(project_id: str, photo_id: str):
+    """Delete a photo from the project"""
+    project_data = await db.projects.find_one({"id": project_id})
+    if not project_data:
+        raise HTTPException(status_code=404, detail="Project not found")
+    
+    # Find and remove photo
+    photos = project_data.get('photos', [])
+    photo_to_delete = None
+    for photo in photos:
+        if photo['id'] == photo_id:
+            photo_to_delete = photo
+            break
+    
+    if photo_to_delete:
+        # Delete files
+        photo_path = PHOTOS_DIR / photo_to_delete['filename']
+        if photo_path.exists():
+            photo_path.unlink()
+        
+        thumb_path = THUMBNAILS_DIR / photo_to_delete.get('thumbnail', '')
+        if thumb_path.exists():
+            thumb_path.unlink()
+        
+        # Remove from list
+        await db.projects.update_one(
+            {"id": project_id},
+            {"$pull": {"photos": {"id": photo_id}}}
+        )
+    
+    return {"deleted": True}
+
+@api_router.put("/projects/{project_id}/settings")
+async def update_settings(project_id: str, settings: SettingsUpdate):
+    """Update project settings"""
+    update_data = {k: v for k, v in settings.model_dump().items() if v is not None}
+    if update_data:
+        update_fields = {f"settings.{k}": v for k, v in update_data.items()}
+        await db.projects.update_one(
+            {"id": project_id},
+            {"$set": update_fields}
+        )
+    return {"updated": True}
+
+@api_router.post("/projects/{project_id}/export")
+async def start_export(project_id: str, background_tasks: BackgroundTasks):
+    """Start video export"""
+    project_data = await db.projects.find_one({"id": project_id})
+    if not project_data:
+        raise HTTPException(status_code=404, detail="Project not found")
+    
+    # Add export task to background
+    background_tasks.add_task(export_video, project_id)
+    
+    return {"status": "started"}
+
+@api_router.get("/projects/{project_id}/export/status")
+async def get_export_status(project_id: str):
+    """Get export status"""
+    project_data = await db.projects.find_one({"id": project_id}, {"_id": 0})
+    if not project_data:
+        raise HTTPException(status_code=404, detail="Project not found")
+    
+    return {
+        "status": project_data.get("export_status", "idle"),
+        "progress": project_data.get("export_progress", 0),
+        "file": project_data.get("export_file")
+    }
+
+@api_router.get("/projects/{project_id}/export/download")
+async def download_export(project_id: str):
+    """Download exported video"""
+    project_data = await db.projects.find_one({"id": project_id})
+    if not project_data:
+        raise HTTPException(status_code=404, detail="Project not found")
+    
+    export_file = project_data.get("export_file")
+    if not export_file:
+        raise HTTPException(status_code=404, detail="No export available")
+    
+    file_path = EXPORT_DIR / export_file
+    if not file_path.exists():
+        raise HTTPException(status_code=404, detail="Export file not found")
+    
+    return FileResponse(
+        path=str(file_path),
+        filename=f"photosync_video.mp4",
+        media_type="video/mp4"
+    )
+
+@api_router.get("/photos/{filename}")
+async def get_photo(filename: str):
+    """Serve photo file"""
+    file_path = PHOTOS_DIR / filename
+    if not file_path.exists():
+        raise HTTPException(status_code=404, detail="Photo not found")
+    
+    return FileResponse(path=str(file_path))
+
+@api_router.get("/thumbnails/{filename}")
+async def get_thumbnail(filename: str):
+    """Serve thumbnail file"""
+    file_path = THUMBNAILS_DIR / filename
+    if not file_path.exists():
+        raise HTTPException(status_code=404, detail="Thumbnail not found")
+    
+    return FileResponse(path=str(file_path))
+
+# Include router
 app.include_router(api_router)
 
 app.add_middleware(
