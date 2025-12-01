@@ -67,9 +67,11 @@ class PhotoSyncAPITester:
             if success:
                 try:
                     response_data = response.json()
-                    return self.log_test(name, True, details, response_data)
+                    self.log_test(name, True, details, response_data)
+                    return True
                 except:
-                    return self.log_test(name, True, details, {"raw_response": response.text[:200]})
+                    self.log_test(name, True, details, {"raw_response": response.text[:200]})
+                    return True
             else:
                 error_details = f"Expected {expected_status}, got {response.status_code}"
                 try:
@@ -77,7 +79,8 @@ class PhotoSyncAPITester:
                     error_details += f" - {error_data}"
                 except:
                     error_details += f" - {response.text[:200]}"
-                return self.log_test(name, False, error_details)
+                self.log_test(name, False, error_details)
+                return False
 
         except requests.exceptions.Timeout:
             return self.log_test(name, False, "Request timeout")
