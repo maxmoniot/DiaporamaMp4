@@ -45,7 +45,7 @@ import { Input } from "@/components/ui/input";
 const API = `${process.env.REACT_APP_BACKEND_URL}/api`;
 
 // Composant Preview optimisé avec double buffer et préchargement
-const PreviewPlayer = ({ photos, currentIndex, isPlaying, format, transition }) => {
+const PreviewPlayer = ({ photos, currentIndex, isPlaying, format, transition, currentTime, totalDuration, audioRef }) => {
   const [loadedImages, setLoadedImages] = useState({});
   const [displayIndex, setDisplayIndex] = useState(0);
   const [zoomProgress, setZoomProgress] = useState(0);
@@ -59,7 +59,6 @@ const PreviewPlayer = ({ photos, currentIndex, isPlaying, format, transition }) 
     const preloadImages = async () => {
       const loaded = {};
       for (const photo of photos) {
-        // Utiliser la preview avec fond flou si disponible
         const url = photo.preview 
           ? `${API}/previews/${photo.preview}`
           : `${API}/photos/${photo.filename}`;
@@ -72,12 +71,8 @@ const PreviewPlayer = ({ photos, currentIndex, isPlaying, format, transition }) 
             img.onerror = reject;
           });
           loaded[photo.id] = url;
-          console.log(`Loaded preview for ${photo.id}: ${url}`);
         } catch (e) {
-          // Fallback to original photo
-          const fallback = `${API}/photos/${photo.filename}`;
-          loaded[photo.id] = fallback;
-          console.log(`Fallback for ${photo.id}: ${fallback}`);
+          loaded[photo.id] = `${API}/photos/${photo.filename}`;
         }
       }
       setLoadedImages(loaded);
@@ -103,7 +98,7 @@ const PreviewPlayer = ({ photos, currentIndex, isPlaying, format, transition }) 
     const currentPhoto = photos[displayIndex];
     if (!currentPhoto) return;
     
-    const duration = currentPhoto.duration * 1000; // en ms
+    const duration = currentPhoto.duration * 1000;
     startTimeRef.current = performance.now();
     
     const animate = (timestamp) => {
@@ -131,10 +126,26 @@ const PreviewPlayer = ({ photos, currentIndex, isPlaying, format, transition }) 
     startTimeRef.current = performance.now();
   }, [displayIndex]);
   
+  // Calcul du fondu audio et vidéo
+  const fadeOutDuration = 1.5; // secondes
+  const fadeStartTime = totalDuration - fadeOutDuration;
+  const isInFadeZone = currentTime >= fadeStartTime && totalDuration > fadeOutDuration;
+  const fadeProgress = isInFadeZone ? (currentTime - fadeStartTime) / fadeOutDuration : 0;
+  const fadeOpacity = 1 - fadeProgress;
+  
+  // Appliquer le fondu audio
+  useEffect(() => {
+    if (audioRef?.current) {
+      if (isInFadeZone) {
+        audioRef.current.volume = Math.max(0, fadeOpacity);
+      } else {
+        audioRef.current.volume = 1;
+      }
+    }
+  }, [fadeOpacity, isInFadeZone, audioRef]);
+  
   const currentPhoto = photos[displayIndex];
   const currentUrl = currentPhoto ? loadedImages[currentPhoto.id] : null;
-  
-  // Calculer le scale basé sur le progress (1.0 à 1.08)
   const scale = 1 + (zoomProgress * 0.08);
   
   return (
