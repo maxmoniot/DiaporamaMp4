@@ -14,7 +14,6 @@ import {
   ImageIcon,
   Wand2,
   GripVertical,
-  ChevronDown,
   Clock,
   Loader2,
   CheckCircle2,
@@ -22,7 +21,6 @@ import {
   Volume2,
   VolumeX,
   SkipBack,
-  SkipForward,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Slider } from "@/components/ui/slider";
@@ -55,6 +53,7 @@ export default function HomePage() {
   const [exportStatus, setExportStatus] = useState(null);
   const [isMuted, setIsMuted] = useState(false);
   const [selectedPhotoId, setSelectedPhotoId] = useState(null);
+  const [previewError, setPreviewError] = useState(null);
   
   const audioRef = useRef(null);
   const playIntervalRef = useRef(null);
@@ -278,7 +277,7 @@ export default function HomePage() {
       setIsPlaying(true);
       if (audioRef.current && project?.music) {
         audioRef.current.currentTime = currentTime;
-        audioRef.current.play();
+        audioRef.current.play().catch(() => {});
       }
       
       playIntervalRef.current = setInterval(() => {
@@ -352,9 +351,28 @@ export default function HomePage() {
     }
   };
 
-  const downloadExport = () => {
+  const downloadExport = async () => {
     if (!project?.id) return;
-    window.open(`${API}/projects/${project.id}/export/download`, "_blank");
+    try {
+      const response = await axios.get(
+        `${API}/projects/${project.id}/export/download`,
+        { responseType: 'blob' }
+      );
+      
+      // Create download link
+      const url = window.URL.createObjectURL(new Blob([response.data]));
+      const link = document.createElement('a');
+      link.href = url;
+      link.setAttribute('download', 'photosync_video.mp4');
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.URL.revokeObjectURL(url);
+      
+      toast.success("Téléchargement démarré !");
+    } catch (error) {
+      toast.error("Erreur lors du téléchargement");
+    }
   };
 
   // Sorted photos
@@ -363,6 +381,18 @@ export default function HomePage() {
     : [];
 
   const currentPhoto = sortedPhotos[currentPhotoIndex];
+  const currentFormat = project?.settings?.format || "horizontal";
+
+  // Get preview URL with blurred background
+  const getPreviewUrl = (photo) => {
+    if (!photo) return null;
+    // Use the preview with blurred background
+    if (photo.preview) {
+      return `${API}/previews/${photo.preview}`;
+    }
+    // Fallback to original photo
+    return `${API}/photos/${photo.filename}`;
+  };
 
   if (isLoading) {
     return (
@@ -597,36 +627,51 @@ export default function HomePage() {
                 {/* Preview container */}
                 <div
                   className={`card overflow-hidden bg-black relative ${
-                    project?.settings?.format === "vertical"
+                    currentFormat === "vertical"
                       ? "preview-vertical max-w-[300px] mx-auto"
                       : "preview-horizontal"
                   }`}
                   data-testid="preview-container"
                 >
-                  {currentPhoto ? (
-                    <motion.div
-                      key={currentPhoto.id}
-                      initial={{ opacity: 0.8, scale: 1 }}
-                      animate={{ opacity: 1, scale: 1.05 }}
-                      transition={{ duration: currentPhoto.duration, ease: "linear" }}
-                      className="absolute inset-0"
-                    >
-                      <img
-                        src={`${API}/photos/${currentPhoto.filename}`}
-                        alt=""
-                        className="w-full h-full object-cover"
-                      />
-                    </motion.div>
-                  ) : (
-                    <div className="absolute inset-0 flex items-center justify-center text-zinc-600">
-                      <ImageIcon className="w-16 h-16" />
-                    </div>
-                  )}
+                  <AnimatePresence mode="wait">
+                    {currentPhoto ? (
+                      <motion.div
+                        key={`${currentPhoto.id}-${currentPhotoIndex}`}
+                        initial={{ opacity: 0 }}
+                        animate={{ 
+                          opacity: 1,
+                          scale: [1, 1.05],
+                        }}
+                        exit={{ opacity: 0 }}
+                        transition={{ 
+                          opacity: { duration: 0.3 },
+                          scale: { duration: currentPhoto.duration, ease: "linear" }
+                        }}
+                        className="absolute inset-0"
+                      >
+                        <img
+                          src={getPreviewUrl(currentPhoto)}
+                          alt=""
+                          className="w-full h-full object-contain"
+                          onError={() => setPreviewError(currentPhoto.id)}
+                        />
+                      </motion.div>
+                    ) : (
+                      <div className="absolute inset-0 flex items-center justify-center text-zinc-600">
+                        <ImageIcon className="w-16 h-16" />
+                      </div>
+                    )}
+                  </AnimatePresence>
                   
                   {/* Time overlay */}
-                  <div className="absolute bottom-4 right-4 bg-black/70 px-3 py-1 rounded-full text-sm mono">
+                  <div className="absolute bottom-4 right-4 bg-black/70 px-3 py-1 rounded-full text-sm mono z-10">
                     {Math.floor(currentTime / 60)}:{String(Math.floor(currentTime % 60)).padStart(2, "0")} / 
                     {Math.floor(getTotalDuration() / 60)}:{String(Math.floor(getTotalDuration() % 60)).padStart(2, "0")}
+                  </div>
+                  
+                  {/* Photo counter */}
+                  <div className="absolute top-4 left-4 bg-black/70 px-3 py-1 rounded-full text-sm mono z-10">
+                    {currentPhotoIndex + 1} / {sortedPhotos.length}
                   </div>
                 </div>
 
@@ -735,6 +780,13 @@ export default function HomePage() {
                   <div className="absolute top-1 left-1 text-white/50">
                     <GripVertical className="w-4 h-4" />
                   </div>
+                  
+                  {/* Orientation indicator */}
+                  {photo.orientation === "portrait" && (
+                    <div className="absolute bottom-1 left-1 bg-indigo-500/70 px-1 py-0.5 rounded text-[10px]">
+                      V
+                    </div>
+                  )}
                 </Reorder.Item>
               ))}
             </Reorder.Group>
@@ -766,8 +818,9 @@ export default function HomePage() {
       {project?.music && (
         <audio
           ref={audioRef}
-          src={`${API}/projects/${project.id}/music`}
+          src={`${API}/music/${project.music.filename}`}
           muted={isMuted}
+          preload="auto"
         />
       )}
 

@@ -15,7 +15,7 @@ import shutil
 import json
 import subprocess
 import asyncio
-from PIL import Image, ImageFilter
+from PIL import Image, ImageFilter, ImageEnhance
 import numpy as np
 import io
 import base64
@@ -34,8 +34,9 @@ PHOTOS_DIR = UPLOAD_DIR / 'photos'
 MUSIC_DIR = UPLOAD_DIR / 'music'
 EXPORT_DIR = UPLOAD_DIR / 'exports'
 THUMBNAILS_DIR = UPLOAD_DIR / 'thumbnails'
+PREVIEW_DIR = UPLOAD_DIR / 'previews'
 
-for d in [PHOTOS_DIR, MUSIC_DIR, EXPORT_DIR, THUMBNAILS_DIR]:
+for d in [PHOTOS_DIR, MUSIC_DIR, EXPORT_DIR, THUMBNAILS_DIR, PREVIEW_DIR]:
     d.mkdir(parents=True, exist_ok=True)
 
 app = FastAPI()
@@ -52,6 +53,7 @@ class Photo(BaseModel):
     duration: float = 2.0  # seconds this photo displays
     order: int = 0
     thumbnail: Optional[str] = None
+    preview: Optional[str] = None  # Preview with blurred background
 
 class MusicInfo(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
@@ -115,12 +117,130 @@ async def create_thumbnail(image_path: Path, thumb_path: Path, size=(200, 200)):
     """Create thumbnail for preview"""
     try:
         with Image.open(image_path) as img:
+            # Convert RGBA to RGB if needed
+            if img.mode == 'RGBA':
+                bg = Image.new('RGB', img.size, (0, 0, 0))
+                bg.paste(img, mask=img.split()[3])
+                img = bg
+            elif img.mode != 'RGB':
+                img = img.convert('RGB')
+            
             img.thumbnail(size, Image.Resampling.LANCZOS)
             img.save(thumb_path, "JPEG", quality=85)
         return True
     except Exception as e:
         logging.error(f"Error creating thumbnail: {e}")
         return False
+
+def create_preview_with_blur(image_path: Path, preview_path: Path, target_format: str = "horizontal"):
+    """Create preview image with blurred background for different aspect ratios"""
+    try:
+        # Target sizes for preview (smaller for web)
+        target_sizes = {
+            "horizontal": (960, 540),  # 16:9
+            "vertical": (540, 960),     # 9:16
+        }
+        target_size = target_sizes.get(target_format, (960, 540))
+        
+        with Image.open(image_path) as img:
+            # Convert to RGB
+            if img.mode == 'RGBA':
+                bg = Image.new('RGB', img.size, (0, 0, 0))
+                bg.paste(img, mask=img.split()[3])
+                img = bg
+            elif img.mode != 'RGB':
+                img = img.convert('RGB')
+            
+            # Create blurred background
+            bg = create_blurred_background(img, target_size)
+            
+            # Fit the image
+            fitted = fit_image_to_frame(img, target_size)
+            
+            # Center the fitted image on the background
+            x = (target_size[0] - fitted.width) // 2
+            y = (target_size[1] - fitted.height) // 2
+            
+            bg.paste(fitted, (x, y))
+            bg.save(preview_path, "JPEG", quality=85)
+        
+        return True
+    except Exception as e:
+        logging.error(f"Error creating preview: {e}")
+        return False
+
+def create_blurred_background(img: Image.Image, target_size: tuple) -> Image.Image:
+    """Create a blurred background from the image"""
+    # Scale image to fill the target size
+    img_ratio = img.width / img.height
+    target_ratio = target_size[0] / target_size[1]
+    
+    if img_ratio > target_ratio:
+        # Image is wider, scale by height
+        new_height = target_size[1]
+        new_width = int(new_height * img_ratio)
+    else:
+        # Image is taller, scale by width
+        new_width = target_size[0]
+        new_height = int(new_width / img_ratio)
+    
+    # Resize and center crop
+    bg = img.resize((new_width, new_height), Image.Resampling.LANCZOS)
+    
+    # Center crop to target size
+    left = (new_width - target_size[0]) // 2
+    top = (new_height - target_size[1]) // 2
+    bg = bg.crop((left, top, left + target_size[0], top + target_size[1]))
+    
+    # Apply blur
+    bg = bg.filter(ImageFilter.GaussianBlur(radius=30))
+    
+    # Darken slightly
+    enhancer = ImageEnhance.Brightness(bg)
+    bg = enhancer.enhance(0.5)
+    
+    return bg
+
+def fit_image_to_frame(img: Image.Image, target_size: tuple) -> Image.Image:
+    """Fit image to frame while maintaining aspect ratio"""
+    img_ratio = img.width / img.height
+    target_ratio = target_size[0] / target_size[1]
+    
+    if img_ratio > target_ratio:
+        # Image is wider, fit by width
+        new_width = target_size[0]
+        new_height = int(new_width / img_ratio)
+    else:
+        # Image is taller, fit by height
+        new_height = target_size[1]
+        new_width = int(new_height * img_ratio)
+    
+    return img.resize((new_width, new_height), Image.Resampling.LANCZOS)
+
+def create_frame_with_background(img_path: Path, target_size: tuple) -> Image.Image:
+    """Create a frame with the image on a blurred background"""
+    with Image.open(img_path) as img:
+        # Convert to RGB
+        if img.mode == 'RGBA':
+            bg_img = Image.new('RGB', img.size, (0, 0, 0))
+            bg_img.paste(img, mask=img.split()[3])
+            img = bg_img
+        elif img.mode != 'RGB':
+            img = img.convert('RGB')
+        
+        # Create blurred background
+        bg = create_blurred_background(img, target_size)
+        
+        # Fit the image
+        fitted = fit_image_to_frame(img, target_size)
+        
+        # Center the fitted image on the background
+        x = (target_size[0] - fitted.width) // 2
+        y = (target_size[1] - fitted.height) // 2
+        
+        bg.paste(fitted, (x, y))
+        
+        return bg
 
 async def analyze_audio(file_path: Path) -> dict:
     """Analyze audio file to extract tempo and beats"""
@@ -152,74 +272,6 @@ async def analyze_audio(file_path: Path) -> dict:
             "tempo": 120.0,
             "beats": []
         }
-
-def create_blurred_background(img: Image.Image, target_size: tuple) -> Image.Image:
-    """Create a blurred background from the image"""
-    # Scale image to fill the target size
-    img_ratio = img.width / img.height
-    target_ratio = target_size[0] / target_size[1]
-    
-    if img_ratio > target_ratio:
-        # Image is wider, scale by height
-        new_height = target_size[1]
-        new_width = int(new_height * img_ratio)
-    else:
-        # Image is taller, scale by width
-        new_width = target_size[0]
-        new_height = int(new_width / img_ratio)
-    
-    # Resize and center crop
-    bg = img.resize((new_width, new_height), Image.Resampling.LANCZOS)
-    
-    # Center crop to target size
-    left = (new_width - target_size[0]) // 2
-    top = (new_height - target_size[1]) // 2
-    bg = bg.crop((left, top, left + target_size[0], top + target_size[1]))
-    
-    # Apply blur
-    bg = bg.filter(ImageFilter.GaussianBlur(radius=30))
-    
-    # Darken slightly
-    from PIL import ImageEnhance
-    enhancer = ImageEnhance.Brightness(bg)
-    bg = enhancer.enhance(0.5)
-    
-    return bg
-
-def fit_image_to_frame(img: Image.Image, target_size: tuple) -> Image.Image:
-    """Fit image to frame while maintaining aspect ratio"""
-    img_ratio = img.width / img.height
-    target_ratio = target_size[0] / target_size[1]
-    
-    if img_ratio > target_ratio:
-        # Image is wider, fit by width
-        new_width = target_size[0]
-        new_height = int(new_width / img_ratio)
-    else:
-        # Image is taller, fit by height
-        new_height = target_size[1]
-        new_width = int(new_height * img_ratio)
-    
-    return img.resize((new_width, new_height), Image.Resampling.LANCZOS)
-
-def create_frame_with_background(img_path: Path, target_size: tuple) -> Image.Image:
-    """Create a frame with the image on a blurred background"""
-    with Image.open(img_path) as img:
-        img = img.convert('RGB')
-        
-        # Create blurred background
-        bg = create_blurred_background(img, target_size)
-        
-        # Fit the image
-        fitted = fit_image_to_frame(img, target_size)
-        
-        # Center the fitted image on the background
-        x = (target_size[0] - fitted.width) // 2
-        y = (target_size[1] - fitted.height) // 2
-        
-        bg.paste(fitted, (x, y))
-        
-        return bg
 
 async def export_video(project_id: str):
     """Export project to MP4 video"""
@@ -265,7 +317,7 @@ async def export_video(project_id: str):
             # Calculate frames for this photo
             photo_frames = int(photo.duration * fps)
             
-            # Create base frame
+            # Create base frame with blurred background
             base_frame = create_frame_with_background(photo_path, target_size)
             
             # Generate frames with Ken Burns effect
@@ -407,6 +459,7 @@ async def upload_photos(project_id: str, files: List[UploadFile] = File(...)):
     
     uploaded_photos = []
     current_order = len(project_data.get('photos', []))
+    current_format = project_data.get('settings', {}).get('format', 'horizontal')
     
     for file in files:
         # Generate unique filename
@@ -432,6 +485,11 @@ async def upload_photos(project_id: str, files: List[UploadFile] = File(...)):
         thumb_path = THUMBNAILS_DIR / thumb_filename
         await create_thumbnail(file_path, thumb_path)
         
+        # Create preview with blurred background
+        preview_filename = f"{photo_id}_preview_{current_format}.jpg"
+        preview_path = PREVIEW_DIR / preview_filename
+        create_preview_with_blur(file_path, preview_path, current_format)
+        
         # Create photo object
         photo = Photo(
             id=photo_id,
@@ -441,7 +499,8 @@ async def upload_photos(project_id: str, files: List[UploadFile] = File(...)):
             height=height,
             orientation=get_orientation(width, height),
             order=current_order,
-            thumbnail=thumb_filename
+            thumbnail=thumb_filename,
+            preview=preview_filename
         )
         
         uploaded_photos.append(photo.model_dump())
@@ -507,23 +566,21 @@ async def sync_photos_to_beats(project_id: str):
     
     project = Project(**project_data)
     
-    if not project.music or not project.music.beats:
-        raise HTTPException(status_code=400, detail="No music with beat information")
+    if not project.music:
+        raise HTTPException(status_code=400, detail="No music uploaded")
     
     photos = sorted(project.photos, key=lambda p: p.order)
-    beats = project.music.beats
     multiplier = project.settings.global_rhythm_multiplier
     
     if len(photos) == 0:
         return {"synced": False}
     
-    # Calculate beat intervals
+    # Calculate beat interval from tempo
     beat_interval = 60.0 / project.music.tempo * multiplier
     
     # Assign durations based on beats
     updated_photos = []
     for i, photo in enumerate(photos):
-        # Each photo shows for one beat interval (or multiple)
         photo_dict = photo.model_dump()
         photo_dict['duration'] = beat_interval
         updated_photos.append(photo_dict)
@@ -596,6 +653,10 @@ async def delete_photo(project_id: str, photo_id: str):
         if thumb_path.exists():
             thumb_path.unlink()
         
+        preview_path = PREVIEW_DIR / photo_to_delete.get('preview', '')
+        if preview_path.exists():
+            preview_path.unlink()
+        
         # Remove from list
         await db.projects.update_one(
             {"id": project_id},
@@ -608,6 +669,30 @@ async def delete_photo(project_id: str, photo_id: str):
 async def update_settings(project_id: str, settings: SettingsUpdate):
     """Update project settings"""
     update_data = {k: v for k, v in settings.model_dump().items() if v is not None}
+    
+    # If format changed, regenerate previews
+    if 'format' in update_data:
+        project_data = await db.projects.find_one({"id": project_id})
+        if project_data:
+            new_format = update_data['format']
+            photos = project_data.get('photos', [])
+            updated_photos = []
+            
+            for photo in photos:
+                photo_path = PHOTOS_DIR / photo['filename']
+                if photo_path.exists():
+                    # Create new preview with new format
+                    preview_filename = f"{photo['id']}_preview_{new_format}.jpg"
+                    preview_path = PREVIEW_DIR / preview_filename
+                    create_preview_with_blur(photo_path, preview_path, new_format)
+                    photo['preview'] = preview_filename
+                updated_photos.append(photo)
+            
+            await db.projects.update_one(
+                {"id": project_id},
+                {"$set": {"photos": updated_photos}}
+            )
+    
     if update_data:
         update_fields = {f"settings.{k}": v for k, v in update_data.items()}
         await db.projects.update_one(
@@ -622,6 +707,12 @@ async def start_export(project_id: str, background_tasks: BackgroundTasks):
     project_data = await db.projects.find_one({"id": project_id})
     if not project_data:
         raise HTTPException(status_code=404, detail="Project not found")
+    
+    # Reset export status
+    await db.projects.update_one(
+        {"id": project_id},
+        {"$set": {"export_status": "processing", "export_progress": 0, "export_file": None}}
+    )
     
     # Add export task to background
     background_tasks.add_task(export_video, project_id)
@@ -658,8 +749,11 @@ async def download_export(project_id: str):
     
     return FileResponse(
         path=str(file_path),
-        filename=f"photosync_video.mp4",
-        media_type="video/mp4"
+        filename="photosync_video.mp4",
+        media_type="video/mp4",
+        headers={
+            "Content-Disposition": f"attachment; filename=photosync_video.mp4"
+        }
     )
 
 @api_router.get("/photos/{filename}")
@@ -677,6 +771,15 @@ async def get_thumbnail(filename: str):
     file_path = THUMBNAILS_DIR / filename
     if not file_path.exists():
         raise HTTPException(status_code=404, detail="Thumbnail not found")
+    
+    return FileResponse(path=str(file_path))
+
+@api_router.get("/previews/{filename}")
+async def get_preview(filename: str):
+    """Serve preview file with blurred background"""
+    file_path = PREVIEW_DIR / filename
+    if not file_path.exists():
+        raise HTTPException(status_code=404, detail="Preview not found")
     
     return FileResponse(path=str(file_path))
 
