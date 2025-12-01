@@ -778,6 +778,9 @@ export default function HomePage() {
                     isPlaying={isPlaying}
                     format={currentFormat}
                     transition={project?.settings?.transition || "none"}
+                    currentTime={currentTime}
+                    totalDuration={getTotalDuration()}
+                    audioRef={audioRef}
                   />
                   
                   {/* Overlays */}
