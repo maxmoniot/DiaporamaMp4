@@ -313,42 +313,67 @@ async def export_video(project_id: str):
         
         # Collect all frames in memory
         all_frames = []
+        total_duration = sum(p.duration for p in project.photos)
+        fade_out_duration = 1.5  # seconds for fade to black
         
         for photo_idx, photo in enumerate(sorted(project.photos, key=lambda p: p.order)):
             photo_path = PHOTOS_DIR / photo.filename
             if not photo_path.exists():
                 continue
             
-            # Calculate frames for this photo
+            is_last_photo = (photo_idx == total_photos - 1)
             photo_frames = int(photo.duration * fps)
             
-            # Create base frame with blurred background
+            # Create base frame with blurred background (higher res for smooth zoom)
             base_frame = create_frame_with_background(photo_path, target_size)
+            base_array = np.array(base_frame, dtype=np.float32)
             
-            # Generate frames with Ken Burns effect
+            # Generate frames with smooth Ken Burns effect
             for frame_num in range(photo_frames):
-                progress = frame_num / max(photo_frames - 1, 1)
+                # Use easing function for smoother animation
+                t = frame_num / max(photo_frames - 1, 1)
+                # Smooth easing (ease-in-out)
+                progress = t * t * (3.0 - 2.0 * t)
                 
-                # Ken Burns effect: slight zoom
-                zoom_factor = 1.0 + 0.05 * progress
+                # Ken Burns: smooth zoom from 1.0 to 1.05
+                zoom = 1.0 + 0.05 * progress
                 
-                new_width = int(target_size[0] / zoom_factor)
-                new_height = int(target_size[1] / zoom_factor)
+                # Calculate crop region with float precision
+                crop_w = target_size[0] / zoom
+                crop_h = target_size[1] / zoom
                 
-                pan_x = int(10 * progress)
-                pan_y = int(5 * progress)
+                # Smooth pan (using float)
+                pan_x = 8.0 * progress
+                pan_y = 4.0 * progress
                 
-                left = (target_size[0] - new_width) // 2 + pan_x
-                top = (target_size[1] - new_height) // 2 + pan_y
+                # Center crop with pan offset
+                left = (target_size[0] - crop_w) / 2.0 + pan_x
+                top = (target_size[1] - crop_h) / 2.0 + pan_y
                 
-                left = max(0, min(left, target_size[0] - new_width))
-                top = max(0, min(top, target_size[1] - new_height))
+                # Ensure bounds
+                left = max(0, min(left, target_size[0] - crop_w))
+                top = max(0, min(top, target_size[1] - crop_h))
                 
-                frame = base_frame.crop((left, top, left + new_width, top + new_height))
+                # Crop and resize
+                frame = base_frame.crop((
+                    int(left), 
+                    int(top), 
+                    int(left + crop_w), 
+                    int(top + crop_h)
+                ))
                 frame = frame.resize(target_size, Image.Resampling.LANCZOS)
+                frame_array = np.array(frame, dtype=np.uint8)
                 
-                # Convert to numpy array for imageio
-                frame_array = np.array(frame)
+                # Fade to black on last photo
+                if is_last_photo:
+                    frames_for_fade = int(fade_out_duration * fps)
+                    fade_start_frame = photo_frames - frames_for_fade
+                    if frame_num >= fade_start_frame:
+                        fade_progress = (frame_num - fade_start_frame) / frames_for_fade
+                        # Smooth fade
+                        fade_factor = 1.0 - (fade_progress * fade_progress)
+                        frame_array = (frame_array * fade_factor).astype(np.uint8)
+                
                 all_frames.append(frame_array)
             
             # Update progress
@@ -361,7 +386,6 @@ async def export_video(project_id: str):
         # Write video using imageio
         logging.info(f"Writing {len(all_frames)} frames to video")
         
-        # Write frames to video file
         iio.imwrite(
             str(output_file),
             all_frames,
@@ -370,11 +394,12 @@ async def export_video(project_id: str):
             plugin='pyav'
         )
         
-        # If music exists, add it with ffmpeg
+        # If music exists, add it with fade out
         if project.music:
             audio_path = MUSIC_DIR / project.music.filename
             if audio_path.exists():
                 output_with_audio = EXPORT_DIR / f"{project_id}_audio.mp4"
+                # Add audio with fade out at the end
                 cmd = [
                     ffmpeg_path, "-y",
                     "-i", str(output_file),
@@ -382,6 +407,7 @@ async def export_video(project_id: str):
                     "-c:v", "copy",
                     "-c:a", "aac",
                     "-b:a", "192k",
+                    "-af", f"afade=t=out:st={total_duration - 2}:d=2",
                     "-shortest",
                     str(output_with_audio)
                 ]
