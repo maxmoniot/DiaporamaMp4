@@ -1,0 +1,145 @@
+{
+  "identity": {
+    "name": "E1",
+    "persona": "The Anti-AI Designer",
+    "vibe": "Darkroom Precision",
+    "principles": [
+      "Fusion over Imitation",
+      "Emotion First",
+      "Content is King",
+      "Zoom In",
+      "Negative Space",
+      "Contrast"
+    ]
+  },
+  "typography": {
+    "headings": {
+      "font_family": "Unbounded, sans-serif",
+      "weights": ["400", "700"],
+      "usage": "Main titles, section headers, impact numbers",
+      "letter_spacing": "tracking-tight"
+    },
+    "body": {
+      "font_family": "Manrope, sans-serif",
+      "weights": ["400", "500", "600"],
+      "usage": "UI labels, buttons, inputs, general text",
+      "letter_spacing": "tracking-normal"
+    },
+    "mono": {
+      "font_family": "JetBrains Mono, monospace",
+      "usage": "Timecodes, file sizes, technical data"
+    }
+  },
+  "colors": {
+    "palette_name": "Electric Darkroom",
+    "mode": "dark",
+    "background": {
+      "default": "#09090b",
+      "surface": "#18181b",
+      "overlay": "rgba(9, 9, 11, 0.8)"
+    },
+    "text": {
+      "primary": "#fafafa",
+      "secondary": "#a1a1aa",
+      "muted": "#52525b"
+    },
+    "accent": {
+      "primary": "#6366f1",
+      "secondary": "#818cf8",
+      "glow": "0 0 20px rgba(99, 102, 241, 0.5)"
+    },
+    "status": {
+      "success": "#10b981",
+      "warning": "#f59e0b",
+      "error": "#ef4444"
+    },
+    "gradients": {
+      "hero": "linear-gradient(to bottom right, #18181b, #09090b)",
+      "active_border": "linear-gradient(90deg, #6366f1, #a855f7)"
+    }
+  },
+  "layout": {
+    "grid_system": "The Control Room (Mode B)",
+    "spacing_scale": "Generous (2x standard)",
+    "container_padding": "p-6 md:p-12",
+    "structure": {
+      "header": "Fixed, glassmorphic, z-50",
+      "main_stage": "Split view: Media Library (Left) vs Preview (Right)",
+      "timeline": "Fixed bottom, horizontal scroll, magnetic snap",
+      "sidebar": "Collapsible or Floating for export settings"
+    }
+  },
+  "components": {
+    "buttons": {
+      "style": "Sharp edges or pill-shaped, no default rounded-md",
+      "primary": "bg-primary text-primary-foreground hover:bg-primary/90 shadow-[0_0_15px_rgba(99,102,241,0.3)]",
+      "secondary": "bg-secondary text-secondary-foreground hover:bg-secondary/80",
+      "ghost": "hover:bg-accent hover:text-accent-foreground"
+    },
+    "cards": {
+      "style": "Flat, 1px border, no shadow by default",
+      "border": "border-white/10",
+      "hover": "border-white/20 bg-white/5 transition-colors duration-300"
+    },
+    "inputs": {
+      "style": "Minimal, bottom-border only OR deep inset",
+      "focus": "ring-1 ring-indigo-500 border-indigo-500"
+    },
+    "timeline": {
+      "track": "h-32 bg-zinc-900/50 border-t border-white/5 backdrop-blur-lg",
+      "item": "rounded-md overflow-hidden border border-white/10 hover:border-indigo-500 transition-all",
+      "playhead": "w-0.5 bg-indigo-500 h-full absolute z-50 shadow-[0_0_10px_#6366f1]"
+    }
+  },
+  "visual_enhancers": {
+    "glassmorphism": "backdrop-blur-xl bg-black/40 border border-white/10",
+    "textures": "Subtle noise overlay on background (opacity 0.03)",
+    "shadows": "Ambient light only, no harsh drops",
+    "borders": "1px solid rgba(255,255,255,0.08)"
+  },
+  "motion": {
+    "transitions": "transition-all duration-300 ease-out",
+    "micro_interactions": "Scale 0.98 on click, lift -2px on hover",
+    "page_load": "Staggered fade-in for grid items",
+    "timeline_drag": "Spring physics (stiffness: 300, damping: 30)"
+  },
+  "image_urls": {
+    "landscape_demo": [
+      "https://images.unsplash.com/photo-1627048282776-910b45e4716b?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NTY2NzF8MHwxfHNlYXJjaHwxfHxjaW5lbWF0aWMlMjBsYW5kc2NhcGUlMjBwaG90b2dyYXBoeSUyMG5hdHVyZXxlbnwwfHx8fDE3NjQ1ODQ2MDN8MA&ixlib=rb-4.1.0&q=85",
+      "https://images.unsplash.com/photo-1639482561123-f4e6a88362b0?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NTY2NzF8MHwxfHNlYXJjaHwyfHxjaW5lbWF0aWMlMjBsYW5kc2NhcGUlMjBwaG90b2dyYXBoeSUyMG5hdHVyZXxlbnwwfHx8fDE3NjQ1ODQ2MDN8MA&ixlib=rb-4.1.0&q=85",
+      "https://images.unsplash.com/photo-1663091084034-7f28d532b131?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NTY2NzF8MHwxfHNlYXJjaHwzfHxjaW5lbWF0aWMlMjBsYW5kc2NhcGUlMjBwaG90b2dyYXBoeSUyMG5hdHVyZXxlbnwwfHx8fDE3NjQ1ODQ2MDN8MA&ixlib=rb-4.1.0&q=85"
+    ],
+    "portrait_demo": [
+      "https://images.unsplash.com/photo-1621731446690-91bdf5f9c70f?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NDQ2MzR8MHwxfHNlYXJjaHwxfHx1cmJhbiUyMHBvcnRyYWl0JTIwcGhvdG9ncmFwaHklMjBmYXNoaW9ufGVufDB8fHx8MTc2NDU4NDYwNXww&ixlib=rb-4.1.0&q=85",
+      "https://images.unsplash.com/photo-1670423585329-cb57eadf2cd3?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NDQ2MzR8MHwxfHNlYXJjaHwyfHx1cmJhbiUyMHBvcnRyYWl0JTIwcGhvdG9ncmFwaHklMjBmYXNoaW9ufGVufDB8fHx8MTc2NDU4NDYwNXww&ixlib=rb-4.1.0&q=85",
+      "https://images.unsplash.com/photo-1670423585342-a18959276d8d?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NDQ2MzR8MHwxfHNlYXJjaHwzfHx1cmJhbiUyMHBvcnRyYWl0JTIwcGhvdG9ncmFwaHklMjBmYXNoaW9ufGVufDB8fHx8MTc2NDU4NDYwNXww&ixlib=rb-4.1.0&q=85"
+    ]
+  },
+  "instructions_to_main_agent": [
+    "Use .jsx extension for all React components.",
+    "Implement 'Unbounded' font for headings via Google Fonts.",
+    "Implement 'Manrope' font for body via Google Fonts.",
+    "Use 'lucide-react' for all icons.",
+    "Use 'sonner' for all toast notifications.",
+    "Use 'framer-motion' for the timeline drag-and-drop and Ken Burns effects.",
+    "Ensure the 'DropZone' is the hero of the initial state - make it massive and textured.",
+    "The Preview player must maintain aspect ratio (16:9 or 9:16) strictly.",
+    "Do not use gradients for backgrounds, use solid dark colors with subtle noise.",
+    "Ensure all interactive elements have data-testid attributes."
+  ],
+  "universal_guidelines": [
+    "Dark colors look good when used independently without gradients. DO NOT use dark colors as gradients.",
+    "Don't make generic centered layouts, simplistic gradients, and uniform styling.",
+    "Create depth through layered design elements with z-index hierarchy.",
+    "Use glass-morphism effects with backdrop filters (12-24px blur).",
+    "You MUST NOT apply universal transition. Eg: transition: all.",
+    "You MUST NOT center align the app container.",
+    "Always use modern button styles like pill-shaped, or sharp button with interaction animations.",
+    "NEVER use AI assistant Emoji characters.",
+    "Every interaction needs micro-animations.",
+    "Use 2-3x more spacing than feels comfortable.",
+    "Subtle grain textures, noise overlays, custom cursors, selection states, and loading animations.",
+    "Components MUST use named exports.",
+    "Pages MUST use default exports."
+  ]
+}
