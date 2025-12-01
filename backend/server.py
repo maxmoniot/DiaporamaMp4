@@ -664,18 +664,31 @@ async def delete_photo(project_id: str, photo_id: str):
             break
     
     if photo_to_delete:
-        # Delete files
-        photo_path = PHOTOS_DIR / photo_to_delete['filename']
-        if photo_path.exists():
-            photo_path.unlink()
+        # Delete files safely
+        try:
+            photo_path = PHOTOS_DIR / photo_to_delete['filename']
+            if photo_path.exists():
+                photo_path.unlink()
+        except Exception as e:
+            logging.error(f"Error deleting photo file: {e}")
         
-        thumb_path = THUMBNAILS_DIR / photo_to_delete.get('thumbnail', '')
-        if thumb_path.exists():
-            thumb_path.unlink()
+        thumb_name = photo_to_delete.get('thumbnail')
+        if thumb_name:
+            try:
+                thumb_path = THUMBNAILS_DIR / thumb_name
+                if thumb_path.exists():
+                    thumb_path.unlink()
+            except Exception as e:
+                logging.error(f"Error deleting thumbnail: {e}")
         
-        preview_path = PREVIEW_DIR / photo_to_delete.get('preview', '')
-        if preview_path.exists():
-            preview_path.unlink()
+        preview_name = photo_to_delete.get('preview')
+        if preview_name:
+            try:
+                preview_path = PREVIEW_DIR / preview_name
+                if preview_path.exists():
+                    preview_path.unlink()
+            except Exception as e:
+                logging.error(f"Error deleting preview: {e}")
         
         # Remove from list
         await db.projects.update_one(
