@@ -59,6 +59,7 @@ const PreviewPlayer = ({ photos, currentIndex, isPlaying, format, transition }) 
     const preloadImages = async () => {
       const loaded = {};
       for (const photo of photos) {
+        // Utiliser la preview avec fond flou si disponible
         const url = photo.preview 
           ? `${API}/previews/${photo.preview}`
           : `${API}/photos/${photo.filename}`;
@@ -71,9 +72,12 @@ const PreviewPlayer = ({ photos, currentIndex, isPlaying, format, transition }) 
             img.onerror = reject;
           });
           loaded[photo.id] = url;
+          console.log(`Loaded preview for ${photo.id}: ${url}`);
         } catch (e) {
           // Fallback to original photo
-          loaded[photo.id] = `${API}/photos/${photo.filename}`;
+          const fallback = `${API}/photos/${photo.filename}`;
+          loaded[photo.id] = fallback;
+          console.log(`Fallback for ${photo.id}: ${fallback}`);
         }
       }
       setLoadedImages(loaded);
