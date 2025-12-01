@@ -83,11 +83,14 @@ class PhotoSyncAPITester:
                 return False
 
         except requests.exceptions.Timeout:
-            return self.log_test(name, False, "Request timeout")
+            self.log_test(name, False, "Request timeout")
+            return False
         except requests.exceptions.ConnectionError:
-            return self.log_test(name, False, "Connection error - service may be down")
+            self.log_test(name, False, "Connection error - service may be down")
+            return False
         except Exception as e:
-            return self.log_test(name, False, f"Error: {str(e)}")
+            self.log_test(name, False, f"Error: {str(e)}")
+            return False
 
     def create_test_image(self, width=800, height=600, format='JPEG'):
         """Create a test image in memory"""
