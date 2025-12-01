@@ -274,8 +274,15 @@ async def analyze_audio(file_path: Path) -> dict:
         }
 
 async def export_video(project_id: str):
-    """Export project to MP4 video"""
+    """Export project to MP4 video using imageio"""
     try:
+        import imageio.v3 as iio
+        import imageio_ffmpeg
+        
+        # Get ffmpeg path from imageio-ffmpeg
+        ffmpeg_path = imageio_ffmpeg.get_ffmpeg_exe()
+        logging.info(f"Using FFmpeg from: {ffmpeg_path}")
+        
         # Get project from database
         project_data = await db.projects.find_one({"id": project_id})
         if not project_data:
@@ -293,10 +300,6 @@ async def export_video(project_id: str):
         target_size = get_resolution(project.settings.resolution, project.settings.format)
         fps = 30
         
-        # Create temporary directory for frames
-        temp_dir = EXPORT_DIR / f"temp_{project_id}"
-        temp_dir.mkdir(exist_ok=True)
-        
         # Calculate frame counts
         total_photos = len(project.photos)
         if total_photos == 0:
@@ -306,8 +309,10 @@ async def export_video(project_id: str):
             )
             return
         
-        frame_index = 0
-        transition_frames = int(project.settings.transition_duration * fps) if project.settings.transition == "fade" else 0
+        output_file = EXPORT_DIR / f"{project_id}.mp4"
+        
+        # Collect all frames in memory
+        all_frames = []
         
         for photo_idx, photo in enumerate(sorted(project.photos, key=lambda p: p.order)):
             photo_path = PHOTOS_DIR / photo.filename
@@ -322,92 +327,74 @@ async def export_video(project_id: str):
             
             # Generate frames with Ken Burns effect
             for frame_num in range(photo_frames):
-                progress = frame_num / photo_frames
+                progress = frame_num / max(photo_frames - 1, 1)
                 
-                # Ken Burns effect: slight zoom and pan
-                zoom_factor = 1.0 + 0.05 * progress  # 5% zoom over duration
+                # Ken Burns effect: slight zoom
+                zoom_factor = 1.0 + 0.05 * progress
                 
-                # Calculate crop for zoom effect
                 new_width = int(target_size[0] / zoom_factor)
                 new_height = int(target_size[1] / zoom_factor)
                 
-                # Pan slightly
-                pan_x = int(10 * progress)  # Pan 10 pixels
-                pan_y = int(5 * progress)   # Pan 5 pixels
+                pan_x = int(10 * progress)
+                pan_y = int(5 * progress)
                 
                 left = (target_size[0] - new_width) // 2 + pan_x
                 top = (target_size[1] - new_height) // 2 + pan_y
                 
-                # Ensure bounds
                 left = max(0, min(left, target_size[0] - new_width))
                 top = max(0, min(top, target_size[1] - new_height))
                 
                 frame = base_frame.crop((left, top, left + new_width, top + new_height))
                 frame = frame.resize(target_size, Image.Resampling.LANCZOS)
                 
-                # Handle fade transition at start
-                if project.settings.transition == "fade" and photo_idx > 0 and frame_num < transition_frames:
-                    # Load previous frame
-                    prev_frame_path = temp_dir / f"frame_{frame_index - transition_frames + frame_num:06d}.png"
-                    if prev_frame_path.exists():
-                        with Image.open(prev_frame_path) as prev_frame:
-                            alpha = frame_num / transition_frames
-                            frame = Image.blend(prev_frame.convert('RGB'), frame, alpha)
-                
-                # Save frame
-                frame_path = temp_dir / f"frame_{frame_index:06d}.png"
-                frame.save(frame_path, "PNG")
-                frame_index += 1
+                # Convert to numpy array for imageio
+                frame_array = np.array(frame)
+                all_frames.append(frame_array)
             
             # Update progress
-            progress_percent = (photo_idx + 1) / total_photos * 80  # 80% for frame generation
+            progress_percent = (photo_idx + 1) / total_photos * 80
             await db.projects.update_one(
                 {"id": project_id},
                 {"$set": {"export_progress": progress_percent}}
             )
         
-        # Generate video with FFmpeg
-        output_file = EXPORT_DIR / f"{project_id}.mp4"
+        # Write video using imageio
+        logging.info(f"Writing {len(all_frames)} frames to video")
         
-        ffmpeg_cmd = [
-            "ffmpeg", "-y",
-            "-framerate", str(fps),
-            "-i", str(temp_dir / "frame_%06d.png"),
-        ]
+        # Write frames to video file
+        iio.imwrite(
+            str(output_file),
+            all_frames,
+            fps=fps,
+            codec='libx264',
+            plugin='pyav'
+        )
         
-        # Add audio if available
+        # If music exists, add it with ffmpeg
         if project.music:
             audio_path = MUSIC_DIR / project.music.filename
             if audio_path.exists():
-                ffmpeg_cmd.extend(["-i", str(audio_path), "-shortest"])
-        
-        ffmpeg_cmd.extend([
-            "-c:v", "libx264",
-            "-pix_fmt", "yuv420p",
-            "-crf", "23",
-            "-preset", "fast",
-        ])
-        
-        if project.music:
-            ffmpeg_cmd.extend(["-c:a", "aac", "-b:a", "192k"])
-        
-        ffmpeg_cmd.append(str(output_file))
-        
-        logging.info(f"Running FFmpeg: {' '.join(ffmpeg_cmd)}")
-        
-        # Run FFmpeg
-        process = await asyncio.create_subprocess_exec(
-            *ffmpeg_cmd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE
-        )
-        stdout, stderr = await process.communicate()
-        
-        if process.returncode != 0:
-            logging.error(f"FFmpeg error: {stderr.decode()}")
-        
-        # Cleanup temp directory
-        shutil.rmtree(temp_dir, ignore_errors=True)
+                output_with_audio = EXPORT_DIR / f"{project_id}_audio.mp4"
+                cmd = [
+                    ffmpeg_path, "-y",
+                    "-i", str(output_file),
+                    "-i", str(audio_path),
+                    "-c:v", "copy",
+                    "-c:a", "aac",
+                    "-b:a", "192k",
+                    "-shortest",
+                    str(output_with_audio)
+                ]
+                process = await asyncio.create_subprocess_exec(
+                    *cmd,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE
+                )
+                await process.communicate()
+                
+                if output_with_audio.exists():
+                    output_file.unlink()
+                    output_with_audio.rename(output_file)
         
         if output_file.exists() and output_file.stat().st_size > 0:
             await db.projects.update_one(
@@ -420,7 +407,7 @@ async def export_video(project_id: str):
             )
             logging.info(f"Export completed: {output_file}")
         else:
-            logging.error(f"Export failed - file not created or empty")
+            logging.error("Export failed - file not created")
             await db.projects.update_one(
                 {"id": project_id},
                 {"$set": {"export_status": "error"}}
@@ -428,6 +415,12 @@ async def export_video(project_id: str):
     
     except Exception as e:
         logging.error(f"Export error: {e}")
+        import traceback
+        logging.error(traceback.format_exc())
+        await db.projects.update_one(
+            {"id": project_id},
+            {"$set": {"export_status": "error"}}
+        )
         await db.projects.update_one(
             {"id": project_id},
             {"$set": {"export_status": "error"}}
