@@ -107,10 +107,13 @@ class PhotoSyncAPITester:
 
     def test_create_project(self):
         """Test project creation"""
-        success, response_data = self.run_test("Create Project", "POST", "projects", 200)
-        if success and response_data:
-            self.project_id = response_data.get('id')
-            if self.project_id:
+        success = self.run_test("Create Project", "POST", "projects", 200)
+        if success:
+            # Get the response data from the last test result
+            last_result = self.test_results[-1]
+            response_data = last_result.get('response_data')
+            if response_data and response_data.get('id'):
+                self.project_id = response_data.get('id')
                 self.log_test("Project ID Retrieved", True, f"ID: {self.project_id}")
             else:
                 self.log_test("Project ID Retrieved", False, "No ID in response")
