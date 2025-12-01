@@ -324,6 +324,10 @@ async def export_video(project_id: str):
             is_last_photo = (photo_idx == total_photos - 1)
             photo_frames = int(photo.duration * fps)
             
+            # Zoom aléatoire: avant (zoom in) ou arrière (zoom out)
+            import random
+            zoom_in = random.choice([True, False])
+            
             # Create base frame with blurred background (higher res for smooth zoom)
             base_frame = create_frame_with_background(photo_path, target_size)
             base_array = np.array(base_frame, dtype=np.float32)
@@ -333,8 +337,11 @@ async def export_video(project_id: str):
                 # Linear progression (no easing)
                 progress = frame_num / max(photo_frames - 1, 1)
                 
-                # Ken Burns: smooth zoom from 1.0 to 1.05
-                zoom = 1.0 + 0.05 * progress
+                # Ken Burns: zoom in (1.0->1.05) ou zoom out (1.05->1.0)
+                if zoom_in:
+                    zoom = 1.0 + 0.05 * progress
+                else:
+                    zoom = 1.05 - 0.05 * progress
                 
                 # Calculate crop region with float precision
                 crop_w = target_size[0] / zoom
