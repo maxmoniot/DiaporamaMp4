@@ -168,6 +168,8 @@ const PreviewPlayer = ({ photos, currentIndex, isPlaying, format, transition, cu
             transformOrigin: 'center center',
             willChange: 'transform',
             backfaceVisibility: 'hidden',
+            opacity: fadeOpacity,
+            transition: 'opacity 0.1s linear',
           }}
         >
           <img
@@ -176,7 +178,7 @@ const PreviewPlayer = ({ photos, currentIndex, isPlaying, format, transition, cu
             style={{
               width: '100%',
               height: '100%',
-              objectFit: 'cover', // cover pour remplir et montrer le fond flou
+              objectFit: 'cover',
               display: 'block',
             }}
           />
