@@ -385,7 +385,7 @@ async def export_video(project_id: str):
             "-c:v", "libx264",
             "-pix_fmt", "yuv420p",
             "-crf", "23",
-            "-preset", "medium",
+            "-preset", "fast",
         ])
         
         if project.music:
@@ -393,18 +393,23 @@ async def export_video(project_id: str):
         
         ffmpeg_cmd.append(str(output_file))
         
+        logging.info(f"Running FFmpeg: {' '.join(ffmpeg_cmd)}")
+        
         # Run FFmpeg
         process = await asyncio.create_subprocess_exec(
             *ffmpeg_cmd,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE
         )
-        await process.communicate()
+        stdout, stderr = await process.communicate()
+        
+        if process.returncode != 0:
+            logging.error(f"FFmpeg error: {stderr.decode()}")
         
         # Cleanup temp directory
         shutil.rmtree(temp_dir, ignore_errors=True)
         
-        if output_file.exists():
+        if output_file.exists() and output_file.stat().st_size > 0:
             await db.projects.update_one(
                 {"id": project_id},
                 {"$set": {
@@ -413,7 +418,9 @@ async def export_video(project_id: str):
                     "export_file": str(output_file.name)
                 }}
             )
+            logging.info(f"Export completed: {output_file}")
         else:
+            logging.error(f"Export failed - file not created or empty")
             await db.projects.update_one(
                 {"id": project_id},
                 {"$set": {"export_status": "error"}}
