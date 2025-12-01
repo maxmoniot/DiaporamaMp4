@@ -501,29 +501,12 @@ export default function HomePage() {
     }
   };
 
-  const downloadExport = async () => {
+  const downloadExport = () => {
     if (!project?.id) return;
-    
-    try {
-      // Télécharger via fetch + blob pour contourner les restrictions CORS
-      const response = await fetch(`${API}/projects/${project.id}/export/download`);
-      if (!response.ok) throw new Error('Download failed');
-      
-      const blob = await response.blob();
-      const url = window.URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = 'photosync_video.mp4';
-      document.body.appendChild(a);
-      a.click();
-      window.URL.revokeObjectURL(url);
-      document.body.removeChild(a);
-      
-      toast.success("Téléchargement démarré !");
-      setShowExportDialog(false);
-    } catch (error) {
-      toast.error("Erreur lors du téléchargement");
-    }
+    // Ouvrir directement dans un nouvel onglet - le navigateur téléchargera grâce au header Content-Disposition
+    window.open(`${API}/projects/${project.id}/export/download`, '_blank');
+    toast.success("Téléchargement démarré !");
+    setShowExportDialog(false);
   };
 
   const currentFormat = project?.settings?.format || "horizontal";
