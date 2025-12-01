@@ -751,7 +751,7 @@ export default function HomePage() {
 
               {/* Right: Preview */}
               <div className="space-y-4">
-                <div className={`card overflow-hidden ${
+                <div className={`card overflow-hidden relative ${
                   currentFormat === "vertical" ? "max-w-[300px] mx-auto" : ""
                 }`}>
                   <PreviewPlayer
