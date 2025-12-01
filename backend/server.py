@@ -628,6 +628,26 @@ async def update_photo_duration(project_id: str, update: PhotoDurationUpdate):
     )
     return {"updated": True}
 
+class AllPhotosDurationUpdate(BaseModel):
+    duration: float
+
+@api_router.put("/projects/{project_id}/photos/duration/all")
+async def update_all_photos_duration(project_id: str, update: AllPhotosDurationUpdate):
+    """Update duration for all photos in the project"""
+    project_data = await db.projects.find_one({"id": project_id})
+    if not project_data:
+        raise HTTPException(status_code=404, detail="Project not found")
+    
+    photos = project_data.get('photos', [])
+    for photo in photos:
+        photo['duration'] = update.duration
+    
+    await db.projects.update_one(
+        {"id": project_id},
+        {"$set": {"photos": photos}}
+    )
+    return {"updated": True, "count": len(photos)}
+
 @api_router.delete("/projects/{project_id}/photos/{photo_id}")
 async def delete_photo(project_id: str, photo_id: str):
     """Delete a photo from the project"""
