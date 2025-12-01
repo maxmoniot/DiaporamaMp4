@@ -773,10 +773,11 @@ export default function HomePage() {
 
       {/* Export dialog */}
       <Dialog open={showExportDialog} onOpenChange={setShowExportDialog}>
-        <DialogContent className="bg-zinc-900 border-zinc-700" data-testid="export-dialog">
+        <DialogContent className="bg-zinc-900 border-zinc-700" data-testid="export-dialog" aria-describedby="export-dialog-description">
           <DialogHeader>
             <DialogTitle>Export vidéo</DialogTitle>
           </DialogHeader>
+          <p id="export-dialog-description" className="sr-only">Fenêtre d'export de la vidéo MP4</p>
           
           <div className="py-6">
             {exportStatus?.status === "processing" && (
